@@ -1,0 +1,16 @@
+6502emu Command Usage
+	--rom/-r [filename]
+		Load BINARY ROM file as program memory.
+		BINARY ROM file will be loaded at the end of the address space, minus its size.
+
+	--debug/-d
+		Output each instruction and register line by line while executing.
+
+	--benchmark/-b
+		Benchmark a program's execution and provide an equivalent clock frequency.
+
+	--verbose/-v
+		Print additional output.
+
+	--help/-h
+		Show this help screen.
