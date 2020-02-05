@@ -7,7 +7,7 @@
 #include <string>
 #include <cstring>
 #include <fstream>
-#include "SimpleMemory.h"
+#include "base/SimpleMemory.h"
 #include "Databus.h"
 #include "Cpu6502.h"
 

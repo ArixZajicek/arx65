@@ -1,6 +1,7 @@
 #include "BusConnection.h"
 
-#pragma once
+#ifndef SIMPLEMEMORY_H
+#define SIMPLEMEMORY_H
 class SimpleMemory : public BusConnection
 {
 private:
@@ -18,4 +19,4 @@ public:
 	uint8_t read(uint16_t address);
 	void write(uint16_t address, uint8_t byte);
 };
-
+#endif
