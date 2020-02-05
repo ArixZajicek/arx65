@@ -128,6 +128,7 @@ int main(int argc, char* args[])
 	romFile.close();
 	SimpleMemory programROM(0x10000 - romLength, 0xFFFF, rom_data, true);
 
+	//if (OPT_VERBOSE) cout << "Finished loading ROM at 0x" << HEX(4, 0x10000 - romLength) << "." << endl;
 	if (OPT_VERBOSE) cout << "Finished loading ROM at 0x" << HEX(4, 0x10000 - romLength) << "." << endl;
 	
 	// Now prepare our RAM
@@ -190,7 +191,6 @@ void launchCpu(Cpu6502 proc)
 	// End timer.
 	auto bench_end = chrono::high_resolution_clock::now();
 
-	cout << endl << endl;
 	if (OPT_ITERATIONS == 1) cout << "    ---- Program Completed in " << totalCycles << " cycles ----" << endl;
 	else cout << "    ---- " << OPT_ITERATIONS << " iterations of program completed in " << totalCycles << " cycles ----" << endl;
 	if (OPT_BENCHMARK)

@@ -6,7 +6,7 @@
 
 #pragma once
 
-#define HEX(x, prin) setfill('0') << setw(x) << right << uppercase << hex << (short)prin << nouppercase << dec
+#define HEX(x, prin) setfill('0') << setw(x) << right << uppercase << hex << (int)prin << nouppercase << dec
 
 using namespace std;
 
