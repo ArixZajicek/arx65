@@ -11,12 +11,9 @@
 #include "Databus.h"
 #include "Cpu6502.h"
 
-//#define HEX(x, prin) setfill('0') << setw(x) << right << uppercase << hex << (int)prin << nouppercase << dec
-
 using namespace std;
 
 void launchCpu(Cpu6502 proc);
-void bubbleSort();
 
 string OPT_FILENAME;
 bool OPT_DEBUG;
@@ -203,54 +200,4 @@ void launchCpu(Cpu6502 proc)
 		cout << "Program took " << seconds << " seconds to complete." << endl;
 		cout << "Equivalent Clock frequency: " << totalCycles / seconds / 1000000 << " MHz" << endl;
 	}
-}
-
-void bubbleSort()
-{
-	// Load the file into ROM space
-	ifstream inFile;
-	inFile.open("rom/BubbleSortOwn.6502.bin", ios::in | ios::binary);
-	uint8_t prog_data[0x8000];
-	inFile.read((char *)prog_data, 0x8000);
-	inFile.close();
-	SimpleMemory programROM(0x8000, 0xFFFF, prog_data, true);
-
-	// Now prepare our RAM
-	SimpleMemory mainRAM(0x0000, 0x7FFF, (uint8_t)0x00, false);
-	
-	constexpr int numCount = 255;
-
-	mainRAM.write(0x0030, 0x00);
-	mainRAM.write(0x0031, 0x10);
-	mainRAM.write(0x1000, numCount);
-	
-	// Initialize our numbers into RAM
-	srand(time(NULL));
-	for (uint16_t i = 0x1001; i <= 0x1000 + numCount; i++)
-	{
-		uint8_t rNum = rand() & 0xFF;
-		cout << (int)rNum << " ";
-		if ((i - 0x1000) % 16 == 0) cout << endl;
-		mainRAM.write(i, rNum);
-	}
-	cout << endl << endl;
-
-	// Attach devices to the databus
-	Databus bus;
-	bus.attach(&mainRAM);
-	bus.attach(&programROM);
-
-	// Create and launch the CPU
-	Cpu6502 proc(&bus);
-	OPT_BENCHMARK = true;
-	launchCpu(proc);
-
-	// Print sorted results.
-	cout << endl << " -------- Sorted Values -------- " << endl;
-	for (uint16_t i = 0x1001; i <= 0x1000 + numCount; i++)
-	{
-		cout << (int)mainRAM.read(i) << " ";
-		if ((i - 0x1000) % 16 == 0) cout << endl;
-	}
-	cout << endl;
 }
