@@ -1,33 +1,34 @@
-#include <iostream>
-#include <chrono>
-#include <ctime>
-#include <cmath>
-#include <iomanip>
-#include <bitset>
-#include <string>
-#include <cstring>
-#include <fstream>
-#include "SimpleMemory.h"
+#include "Common.h"
+#include "mod/SimpleMemory.h"
 #include "Databus.h"
-#include "Cpu6502.h"
+#include "Processor.h"
+
 
 using namespace std;
+using namespace arx65;
 
-void launchCpu(Cpu6502 proc);
+int mainCli(int, char*[]);
 
-string OPT_FILENAME;
-bool OPT_DEBUG;
-bool OPT_BENCHMARK;
-bool OPT_VERBOSE;
-int OPT_ITERATIONS;
-
-int main(int argc, char* args[])
+int main(int argc, char *args[])
 {
-	OPT_FILENAME = "";
-	OPT_DEBUG = false;
-	OPT_BENCHMARK = false;
-	OPT_VERBOSE = false;
-	OPT_ITERATIONS = 1;
+	// Quick test for nogui mode
+	for (int i = 0; i < argc; i++)
+		if (strcmp(args[i], "-c") == 0)
+			return mainCli(argc, args);
+
+	// Otherwise, start GUI like normal.
+	//LandingWindow window;
+	//return window.launch(argc, args);
+	return 0;
+}
+
+int mainCli(int argc, char *args[])
+{
+	string OPT_FILENAME = "";
+	bool OPT_DEBUG = false;
+	bool OPT_BENCHMARK = false;
+	bool OPT_VERBOSE = false;
+	int OPT_ITERATIONS = 1;
 
 	for (int i = 1; i < argc; i++)
 	{
@@ -41,6 +42,9 @@ int main(int argc, char* args[])
 		// parse the command
 		switch(args[i][1])
 		{
+		case 'c':
+			// Ignore
+			break;
 		case 'r':
 			// ROM Input
 			if ( i + 1 < argc)
@@ -128,6 +132,7 @@ int main(int argc, char* args[])
 	romFile.close();
 	SimpleMemory programROM(0x10000 - romLength, 0xFFFF, rom_data, true);
 
+	//if (OPT_VERBOSE) cout << "Finished loading ROM at 0x" << HEX(4, 0x10000 - romLength) << "." << endl;
 	if (OPT_VERBOSE) cout << "Finished loading ROM at 0x" << HEX(4, 0x10000 - romLength) << "." << endl;
 	
 	// Now prepare our RAM
@@ -136,28 +141,23 @@ int main(int argc, char* args[])
 	if (OPT_VERBOSE) cout << "Created RAM from 0x0000 to 0x" << HEX(4, 0xFFFF - romLength) << "." << endl;
 
 	// Attach devices to the databus
-	Databus bus;
-	bus.attach(&mainRAM);
-	bus.attach(&programROM);
+	Databus::attach(&mainRAM);
+	Databus::attach(&programROM);
 
 	if (OPT_VERBOSE) cout << "Bus created, ROM and RAM attached." << endl;
 
-	// Create and launch the CPU
-	Cpu6502 proc(&bus);
+	// Initialize the CPU
+	Processor::init();
+
+	// Get the registers
+	Processor::RegisterSet *R = Processor::getRegisters();
 
 	if (OPT_VERBOSE) cout << "CPU attached to bus." << endl;
 	
-	launchCpu(proc);
-		
-	return 0;
-}
-
-void launchCpu(Cpu6502 proc) 
-{
 	uint8_t nextInstruction = 0xFF;
 	long totalCycles = 0;
 
-	if (OPT_VERBOSE | OPT_DEBUG | OPT_BENCHMARK) cout << "    ---- Program Starting ----" << endl;
+	if (OPT_VERBOSE | OPT_DEBUG | OPT_BENCHMARK) cout << "Program Starting..." << endl;
 	
 	if (OPT_DEBUG) cout << "  PC   (INS ) |  A   |  X   |  Y   |  SP  | NV BDIZC | Cycles" << endl;
 
@@ -169,30 +169,28 @@ void launchCpu(Cpu6502 proc)
 		// Debug Loop
 		if (OPT_DEBUG) while (nextInstruction != 0x00)
 		{
-			RegisterSet R = proc.R;
-			cout << "0x" << HEX(4, R.PC) << " (0x" << HEX(2, proc.Bus->read(R.PC)) << ") | ";
-			cout << "0x" << HEX(2, R.A) << " | ";
-			cout << "0x" << HEX(2, R.X) << " | ";
-			cout << "0x" << HEX(2, R.Y) << " | ";
-			cout << "0x" << HEX(2, R.SP) << " | ";
-			cout << bitset<8>(R.Flags) << " | ";
-			int t = proc.doNextInstruction();
+			cout << "0x" << HEX(4, R->PC) << " (0x" << HEX(2, Databus::read(R->PC)) << ") | ";
+			cout << "0x" << HEX(2, R->A) << " | ";
+			cout << "0x" << HEX(2, R->X) << " | ";
+			cout << "0x" << HEX(2, R->Y) << " | ";
+			cout << "0x" << HEX(2, R->SP) << " | ";
+			cout << bitset<8>(R->Flags) << " | ";
+			int t = Processor::doNextInstruction();
 			cout << "[" << t << "]" << endl;
 			totalCycles += t;
-			nextInstruction = proc.Bus->read(proc.R.PC);
+			nextInstruction = Databus::read(R->PC);
 		}
 		// Regular loop.
-		else while (!(proc.R.Flags & Cpu6502::FLAG_BRK)) totalCycles += proc.doNextInstruction();
+		else while (!(R->Flags & Processor::FLAG_BRK)) totalCycles += Processor::doNextInstruction();
 
-		proc.doRES();
+		Processor::doRES();
 	}
 	
 	// End timer.
 	auto bench_end = chrono::high_resolution_clock::now();
 
-	cout << endl << endl;
-	if (OPT_ITERATIONS == 1) cout << "    ---- Program Completed in " << totalCycles << " cycles ----" << endl;
-	else cout << "    ---- " << OPT_ITERATIONS << " iterations of program completed in " << totalCycles << " cycles ----" << endl;
+	if (OPT_ITERATIONS == 1) cout << "Program Completed in " << totalCycles << " cycles." << endl;
+	else cout << OPT_ITERATIONS << " iterations of program completed in " << totalCycles << " cycles." << endl;
 	if (OPT_BENCHMARK)
 	{
 		chrono::duration<double> elapsed = bench_end - bench_start;
@@ -200,4 +198,6 @@ void launchCpu(Cpu6502 proc)
 		cout << "Program took " << seconds << " seconds to complete." << endl;
 		cout << "Equivalent Clock frequency: " << totalCycles / seconds / 1000000 << " MHz" << endl;
 	}
+		
+	return 0;
 }
