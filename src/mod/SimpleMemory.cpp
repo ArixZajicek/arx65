@@ -1,5 +1,5 @@
-#include <iostream>
-#include "SimpleMemory.h"
+#include "Common.h"
+#include "mod/SimpleMemory.h"
 
 SimpleMemory::SimpleMemory(uint16_t addressStart, uint16_t addressEnd, uint8_t fillValue, bool ROM) 
 {

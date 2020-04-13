@@ -1,7 +1,8 @@
-#include <cstdint>
+#include "Common.h"
 
 #ifndef BUSCONNECTION_H
 #define BUSCONNECTION_H
+
 class BusConnection {
 public:
 	// Return true if an address is in range of connected device

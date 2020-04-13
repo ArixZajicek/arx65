@@ -1,62 +1,78 @@
-#include <iomanip>
-#include <bitset>
-#include <cstdint>
-#include <iostream>
-#include "Databus.h"
+#include "Processor.h"
 
-#pragma once
+/* Simplify bus functions to just read and write. */
+using arx65::Databus::read;
+using arx65::Databus::write;
 
-#define HEX(x, prin) setfill('0') << setw(x) << right << uppercase << hex << (int)prin << nouppercase << dec
-
-using namespace std;
-
-// Standard Registers
-struct RegisterSet {
-	uint8_t A;
-	uint8_t X;
-	uint8_t Y;
-	uint8_t Flags;
-	uint8_t SP;
-	uint16_t PC;
-};
-
-class Cpu6502
+namespace arx65::Processor
 {
-public:
-
-	static const uint8_t FLAG_NEGATIVE = 0x80;
-	static const uint8_t FLAG_OVERFLOW = 0x40;
-	static const uint8_t FLAG_BRK = 0x10;
-	static const uint8_t FLAG_DECIMAL = 0x08;
-	static const uint8_t FLAG_INTERRUPT = 0x04;
-	static const uint8_t FLAG_ZERO = 0x02;
-	static const uint8_t FLAG_CARRY = 0x01;
-
+	// Set of register info 
 	RegisterSet R;
-	Databus *Bus;
 
-	// Main initialization
-	Cpu6502(Databus *bus);
-
-	// Call the CPU to do the next intruction, and return the number of cycles that instruction takes.
-	int doNextInstruction();
-
-	// Non Mask Interrupt call, finds address from FFFA and FFFB (low/high) and executes regardless
-	void doNMI();
-
-	// Reset processor, of course, find address from FFFC, FFFD and go there.
-	void doRES();
-
-	// Interrupt Request, FFFE and FFFF, interrupt flag must not be set already, but will be set until completed
-	void doIRQ();
-
-private:
 	// Array of function pointers, one for each possible instruction
-	int (Cpu6502::*instruction[256])();
+	int (*instruction[256])();
+
+	RegisterSet *getRegisters()
+	{
+		return &R;
+	}
+
+	RegisterSet getRegistersCopy()
+	{
+		return R;
+	}
+
+	int doNextInstruction()
+	{
+		return (*instruction[read(R.PC)])();
+	}
+
+	// Push a byte onto the stack.
+	void PushStackGeneral(uint8_t num)
+	{
+		write(0x0100 | ((uint16_t)R.SP), num);
+		--R.SP;
+	}
+
+	// Pull a byte back from the stack.
+	uint8_t PullStackGeneral()
+	{
+		++R.SP;
+		return read(0x0100 | ((uint16_t)R.SP));
+	}
+
+	void doNMI() {
+		PushStackGeneral((R.PC >> 8) & 0x00FF);
+		PushStackGeneral((R.PC) & 0x00FF);
+		PushStackGeneral(R.Flags);
+		R.PC = ((uint16_t)read(0xFFFA)) | (((uint16_t)read(0xFFFB)) << 8);
+	}
+
+	// Reset registers to initial values
+	void doRES()
+	{
+		R.A = 0;
+		R.X = 0;
+		R.Y = 0;
+		R.SP = 0xFF;
+		R.Flags = FLAG_INTERRUPT;
+		R.PC = read(0xFFFC) | (read(0xFFFD) << 8);
+	}
+
+	void doIRQ() {
+		// Push current PC onto stack, high then low byte. Then push flags
+		if (!(R.Flags & FLAG_INTERRUPT))
+		{
+			PushStackGeneral((R.PC >> 8) & 0x00FF);
+			PushStackGeneral((R.PC) & 0x00FF);
+			PushStackGeneral(R.Flags);
+			R.PC = ((uint16_t)read(0xFFFE)) | (((uint16_t)read(0xFFFF)) << 8);
+		}
+	}
 
 	uint8_t InvalidInstruction()
 	{
-		cout << "Invalid instruction 0x" << HEX(2, Bus->read(R.PC)) << " at 0x" << HEX(4, R.PC) << "." << endl;
+		std::cout << "Invalid instruction 0x" << HEX(2, read(R.PC)) << " at 0x" << HEX(4, R.PC) << "." << std::endl;
 		++R.PC;
 		return 0;
 	}
@@ -64,31 +80,31 @@ private:
 	/* Reolve a direct Zero Page address. (Advances PC + 1) */
 	uint16_t ResolveZP()
 	{
-		return Bus->read(++R.PC);
+		return read(++R.PC);
 	}
 
 	/* Resolve a direct zero page X, with X offset, including wraparound. (Advances PC + 1) */
 	uint16_t ResolveZPX()
 	{
-		return (Bus->read(++R.PC) + R.X) & 0x00FF;
+		return (read(++R.PC) + R.X) & 0x00FF;
 	}
 
 	/* Resolve a direct zero page Y, with Y offset, including wraparound. (Advances PC + 1) */
 	uint16_t ResolveZPY()
 	{
-		return (Bus->read(++R.PC) + R.Y) & 0x00FF; // This & might not be necessary since both values are already of uint8_t type
+		return (read(++R.PC) + R.Y) & 0x00FF; // This & might not be necessary since both values are already of uint8_t type
 	}
 
 	/* Resolve a direct address (advances PC + 2)*/
 	uint16_t ResolveAbsolute()
 	{
-		return (uint16_t)Bus->read(++R.PC) | (((uint16_t)Bus->read(++R.PC)) << 8);
+		return (uint16_t)read(++R.PC) | (((uint16_t)read(++R.PC)) << 8);
 	}
 
 	/* Resolve direct address with X offset, and pageCrossed will be appropriately set (advances PC + 2)*/
 	uint16_t ResolveAbsoluteX(bool &pageCrossed)
 	{
-		uint16_t addressBeforeAdding = (uint16_t)Bus->read(++R.PC) | (((uint16_t)Bus->read(++R.PC)) << 8);
+		uint16_t addressBeforeAdding = (uint16_t)read(++R.PC) | (((uint16_t)read(++R.PC)) << 8);
 
 		// To determine if a page was crossed, we just see if the most significant byte is bigger
 		pageCrossed = (0xFF00 & (addressBeforeAdding + R.X) > (0xFF00 & addressBeforeAdding));
@@ -98,7 +114,7 @@ private:
 	/* Resolve direct address with Y offset, and pageCrossed will be appropriately set (advances PC + 2)*/
 	uint16_t ResolveAbsoluteY(bool &pageCrossed)
 	{
-		uint16_t addressBeforeAdding = (uint16_t)Bus->read(++R.PC) | (((uint16_t)Bus->read(++R.PC)) << 8);
+		uint16_t addressBeforeAdding = (uint16_t)read(++R.PC) | (((uint16_t)read(++R.PC)) << 8);
 
 		// To determine if a page was crossed, we just see if the most significant byte is bigger
 		pageCrossed = (0xFF00 & (addressBeforeAdding + R.Y) > (0xFF00 & addressBeforeAdding));
@@ -108,15 +124,15 @@ private:
 	/* Resolves an indirect address at zero page + X, then resolve. (advances PC + 1) */
 	uint16_t ResolveIndirectX()
 	{
-		uint8_t zpAddress = Bus->read(++R.PC + R.X);
-		return ((uint16_t)Bus->read(zpAddress)) | ((uint16_t)Bus->read(zpAddress + 1) << 8);
+		uint8_t zpAddress = read(++R.PC + R.X);
+		return ((uint16_t)read(zpAddress)) | ((uint16_t)read(zpAddress + 1) << 8);
 	}
 
 	/* Resolves an indirect address at zero page, then add Y, then resolve. (advances PC + 1) */
 	uint16_t ResolveIndirectY(bool &pageCrossed)
 	{
-		uint8_t zpAddress = Bus->read(++R.PC);
-		uint16_t addressBeforeAdding = ((uint16_t)Bus->read(zpAddress)) | ((uint16_t)Bus->read(zpAddress + 1) << 8);
+		uint8_t zpAddress = read(++R.PC);
+		uint16_t addressBeforeAdding = ((uint16_t)read(zpAddress)) | ((uint16_t)read(zpAddress + 1) << 8);
 
 		// To determine if a page was crossed, we just see if the most significant byte is bigger
 		pageCrossed = (0xFF00 & (addressBeforeAdding + R.Y) > (0xFF00 & addressBeforeAdding));
@@ -185,7 +201,7 @@ private:
 	{
 		if (doBranch) {
 			uint16_t oldPC = R.PC + 2;
-			R.PC += (int8_t)Bus->read(++R.PC);
+			R.PC += (int8_t)read(++R.PC);
 			++R.PC;
 			if (0xFF00 & R.PC != 0xFF00 & oldPC) return 4; // New page
 			return 3; // Success but not a new page
@@ -329,47 +345,33 @@ private:
 		R.Flags |= (dest == 0 ? FLAG_ZERO : 0) | ((0x80 & dest) ? FLAG_NEGATIVE : 0);
 	}
 
-	// Push a byte onto the stack.
-	void PushStackGeneral(uint8_t num)
-	{
-		Bus->write(0x0100 | ((uint16_t)R.SP), num);
-		--R.SP;
-	}
-
-	// Pull a byte back from the stack.
-	uint8_t PullStackGeneral()
-	{
-		++R.SP;
-		return Bus->read(0x0100 | ((uint16_t)R.SP));
-	}
-
 	/*
 	 **** SPECIFIC VERSIONS OF INSTRUCTIONS HERE ****
 	 */
 	int ADC_Immediate()
 	{
-		ADC_General(Bus->read(++R.PC));
+		ADC_General(read(++R.PC));
 		++R.PC;
 		return 2;
 	}
 
 	int ADC_ZP()
 	{
-		ADC_General(Bus->read(ResolveZP()));
+		ADC_General(read(ResolveZP()));
 		++R.PC;
 		return 3;
 	}
 
 	int ADC_ZPX()
 	{
-		ADC_General(Bus->read(ResolveZPX()));
+		ADC_General(read(ResolveZPX()));
 		++R.PC;
 		return 4;
 	}
 
 	int ADC_Absolute()
 	{
-		ADC_General(Bus->read(ResolveAbsolute()));
+		ADC_General(read(ResolveAbsolute()));
 		++R.PC;
 		return 4;
 	}
@@ -377,7 +379,7 @@ private:
 	int ADC_AbsoluteX()
 	{
 		bool pageCrossed;
-		ADC_General(Bus->read(ResolveAbsoluteX(pageCrossed)));
+		ADC_General(read(ResolveAbsoluteX(pageCrossed)));
 		++R.PC;
 		return pageCrossed ? 5 : 4;
 	}
@@ -385,14 +387,14 @@ private:
 	int ADC_AbsoluteY()
 	{
 		bool pageCrossed;
-		ADC_General(Bus->read(ResolveAbsoluteY(pageCrossed)));
+		ADC_General(read(ResolveAbsoluteY(pageCrossed)));
 		++R.PC;
 		return pageCrossed ? 5 : 4;
 	}
 
 	int ADC_IndirectX()
 	{
-		ADC_General(Bus->read(ResolveIndirectX()));
+		ADC_General(read(ResolveIndirectX()));
 		++R.PC;
 		return 6;
 	}
@@ -400,35 +402,35 @@ private:
 	int ADC_IndirectY()
 	{
 		bool pageCrossed;
-		ADC_General(Bus->read(ResolveIndirectY(pageCrossed)));
+		ADC_General(read(ResolveIndirectY(pageCrossed)));
 		++R.PC;
 		return pageCrossed ? 6 : 5;
 	}
 
 	int AND_Immediate()
 	{
-		AND_General(Bus->read(++R.PC));
+		AND_General(read(++R.PC));
 		++R.PC;
 		return 2;
 	}
 
 	int AND_ZP()
 	{
-		AND_General(Bus->read(ResolveZP()));
+		AND_General(read(ResolveZP()));
 		++R.PC;
 		return 3;
 	}
 
 	int AND_ZPX()
 	{
-		AND_General(Bus->read(ResolveZPX()));
+		AND_General(read(ResolveZPX()));
 		++R.PC;
 		return 4;
 	}
 
 	int AND_Absolute()
 	{
-		AND_General(Bus->read(ResolveAbsolute()));
+		AND_General(read(ResolveAbsolute()));
 		++R.PC;
 		return 4;
 	}
@@ -436,7 +438,7 @@ private:
 	int AND_AbsoluteX()
 	{
 		bool pageCrossed;
-		AND_General(Bus->read(ResolveAbsoluteX(pageCrossed)));
+		AND_General(read(ResolveAbsoluteX(pageCrossed)));
 		++R.PC;
 		return pageCrossed ? 5 : 4;
 	}
@@ -444,14 +446,14 @@ private:
 	int AND_AbsoluteY()
 	{
 		bool pageCrossed;
-		AND_General(Bus->read(ResolveAbsoluteY(pageCrossed)));
+		AND_General(read(ResolveAbsoluteY(pageCrossed)));
 		++R.PC;
 		return pageCrossed ? 5 : 4;
 	}
 
 	int AND_IndirectX()
 	{
-		AND_General(Bus->read(ResolveIndirectX()));
+		AND_General(read(ResolveIndirectX()));
 		++R.PC;
 		return 6;
 	}
@@ -459,7 +461,7 @@ private:
 	int AND_IndirectY()
 	{
 		bool pageCrossed;
-		AND_General(Bus->read(ResolveIndirectY(pageCrossed)));
+		AND_General(read(ResolveIndirectY(pageCrossed)));
 		++R.PC;
 		return pageCrossed ? 6 : 5;
 	}
@@ -474,9 +476,9 @@ private:
 	int ASL_ZP()
 	{
 		uint8_t address = ResolveZP();
-		uint8_t num = Bus->read(address);
+		uint8_t num = read(address);
 		ASL_General(num);
-		Bus->write(address, num);
+		write(address, num);
 		++R.PC;
 		return 5;
 	}
@@ -484,9 +486,9 @@ private:
 	int ASL_ZPX()
 	{
 		uint8_t address = ResolveZPX();
-		uint8_t num = Bus->read(address);
+		uint8_t num = read(address);
 		ASL_General(num);
-		Bus->write(address, num);
+		write(address, num);
 		++R.PC;
 		return 6;
 	}
@@ -494,9 +496,9 @@ private:
 	int ASL_Absolute()
 	{
 		uint8_t address = ResolveAbsolute();
-		uint8_t num = Bus->read(address);
+		uint8_t num = read(address);
 		ASL_General(num);
-		Bus->write(address, num);
+		write(address, num);
 		++R.PC;
 		return 6;
 	}
@@ -505,9 +507,9 @@ private:
 	{
 		bool temp;
 		uint8_t address = ResolveAbsoluteX(temp); // TODO: This doesn't actually need this variable, maybe provide an implementation that ignores new pages.
-		uint8_t num = Bus->read(address);
+		uint8_t num = read(address);
 		ASL_General(num);
-		Bus->write(address, num);
+		write(address, num);
 		++R.PC;
 		return 7;
 	}
@@ -529,14 +531,14 @@ private:
 
 	int BIT_ZP()
 	{
-		BIT_General(Bus->read(ResolveZP()));
+		BIT_General(read(ResolveZP()));
 		++R.PC;
 		return 3;
 	}
 
 	int BIT_Absolute()
 	{
-		BIT_General(Bus->read(ResolveAbsolute()));
+		BIT_General(read(ResolveAbsolute()));
 		++R.PC;
 		return 4;
 	}
@@ -604,28 +606,28 @@ private:
 
 	int CMP_Immediate()
 	{
-		CMP_General(R.A, Bus->read(++R.PC));
+		CMP_General(R.A, read(++R.PC));
 		++R.PC;
 		return 2;
 	}
 
 	int CMP_ZP()
 	{
-		CMP_General(R.A, Bus->read(ResolveZP()));
+		CMP_General(R.A, read(ResolveZP()));
 		++R.PC;
 		return 3;
 	}
 
 	int CMP_ZPX()
 	{
-		CMP_General(R.A, Bus->read(ResolveZPX()));
+		CMP_General(R.A, read(ResolveZPX()));
 		++R.PC;
 		return 4;
 	}
 
 	int CMP_Absolute()
 	{
-		CMP_General(R.A, Bus->read(ResolveAbsolute()));
+		CMP_General(R.A, read(ResolveAbsolute()));
 		++R.PC;
 		return 4;
 	}
@@ -633,7 +635,7 @@ private:
 	int CMP_AbsoluteX()
 	{
 		bool pageCrossed;
-		CMP_General(R.A, Bus->read(ResolveAbsoluteX(pageCrossed)));
+		CMP_General(R.A, read(ResolveAbsoluteX(pageCrossed)));
 		++R.PC;
 		return pageCrossed ? 5 : 4;
 	}
@@ -641,14 +643,14 @@ private:
 	int CMP_AbsoluteY()
 	{
 		bool pageCrossed;
-		CMP_General(R.A, Bus->read(ResolveAbsoluteY(pageCrossed)));
+		CMP_General(R.A, read(ResolveAbsoluteY(pageCrossed)));
 		++R.PC;
 		return pageCrossed ? 5 : 4;
 	}
 
 	int CMP_IndirectX()
 	{
-		CMP_General(R.A, Bus->read(ResolveIndirectX()));
+		CMP_General(R.A, read(ResolveIndirectX()));
 		++R.PC;
 		return 6;
 	}
@@ -656,49 +658,49 @@ private:
 	int CMP_IndirectY()
 	{
 		bool pageCrossed;
-		CMP_General(R.A, Bus->read(ResolveIndirectY(pageCrossed)));
+		CMP_General(R.A, read(ResolveIndirectY(pageCrossed)));
 		++R.PC;
 		return pageCrossed ? 6 : 5;
 	}
 
 	int CPX_Immediate()
 	{
-		CMP_General(R.X, Bus->read(++R.PC));
+		CMP_General(R.X, read(++R.PC));
 		++R.PC;
 		return 2;
 	}
 
 	int CPX_ZP()
 	{
-		CMP_General(R.X, Bus->read(ResolveZP()));
+		CMP_General(R.X, read(ResolveZP()));
 		++R.PC;
 		return 3;
 	}
 
 	int CPX_Absolute()
 	{
-		CMP_General(R.X, Bus->read(ResolveAbsolute()));
+		CMP_General(R.X, read(ResolveAbsolute()));
 		++R.PC;
 		return 4;
 	}
 
 	int CPY_Immediate()
 	{
-		CMP_General(R.Y, Bus->read(++R.PC));
+		CMP_General(R.Y, read(++R.PC));
 		++R.PC;
 		return 2;
 	}
 
 	int CPY_ZP()
 	{
-		CMP_General(R.Y, Bus->read(ResolveZP()));
+		CMP_General(R.Y, read(ResolveZP()));
 		++R.PC;
 		return 3;
 	}
 
 	int CPY_Absolute()
 	{
-		CMP_General(R.Y, Bus->read(ResolveAbsolute()));
+		CMP_General(R.Y, read(ResolveAbsolute()));
 		++R.PC;
 		return 4;
 	}
@@ -706,9 +708,9 @@ private:
 	int DEC_ZP()
 	{
 		uint16_t address = ResolveZPX();
-		uint8_t num = Bus->read(address);
+		uint8_t num = read(address);
 		DEC_General(num);
-		Bus->write(address, num);
+		write(address, num);
 		++R.PC;
 		return 5;
 	}
@@ -716,9 +718,9 @@ private:
 	int DEC_ZPX()
 	{
 		uint16_t address = ResolveZPX();
-		uint8_t num = Bus->read(address);
+		uint8_t num = read(address);
 		DEC_General(num);
-		Bus->write(address, num);
+		write(address, num);
 		++R.PC;
 		return 6;
 	}
@@ -726,9 +728,9 @@ private:
 	int DEC_Absolute()
 	{
 		uint16_t address = ResolveAbsolute();
-		uint8_t num = Bus->read(address);
+		uint8_t num = read(address);
 		DEC_General(num);
-		Bus->write(address, num);
+		write(address, num);
 		++R.PC;
 		return 6;
 	}
@@ -737,9 +739,9 @@ private:
 	{
 		bool t;
 		uint16_t address = ResolveAbsoluteX(t);
-		uint8_t num = Bus->read(address);
+		uint8_t num = read(address);
 		DEC_General(num);
-		Bus->write(address, num);
+		write(address, num);
 		++R.PC;
 		return 7;
 	}
@@ -760,28 +762,28 @@ private:
 
 	int EOR_Immediate()
 	{
-		EOR_General(Bus->read(++R.PC));
+		EOR_General(read(++R.PC));
 		++R.PC;
 		return 2;
 	}
 
 	int EOR_ZP()
 	{
-		EOR_General(Bus->read(ResolveZP()));
+		EOR_General(read(ResolveZP()));
 		++R.PC;
 		return 3;
 	}
 
 	int EOR_ZPX()
 	{
-		EOR_General(Bus->read(ResolveZPX()));
+		EOR_General(read(ResolveZPX()));
 		++R.PC;
 		return 4;
 	}
 
 	int EOR_Absolute()
 	{
-		EOR_General(Bus->read(ResolveAbsolute()));
+		EOR_General(read(ResolveAbsolute()));
 		++R.PC;
 		return 4;
 	}
@@ -789,7 +791,7 @@ private:
 	int EOR_AbsoluteX()
 	{
 		bool pageCrossed;
-		EOR_General(Bus->read(ResolveAbsoluteX(pageCrossed)));
+		EOR_General(read(ResolveAbsoluteX(pageCrossed)));
 		++R.PC;
 		return pageCrossed ? 5 : 4;
 	}
@@ -797,14 +799,14 @@ private:
 	int EOR_AbsoluteY()
 	{
 		bool pageCrossed;
-		EOR_General(Bus->read(ResolveAbsoluteY(pageCrossed)));
+		EOR_General(read(ResolveAbsoluteY(pageCrossed)));
 		++R.PC;
 		return pageCrossed ? 5 : 4;
 	}
 
 	int EOR_IndirectX()
 	{
-		EOR_General(Bus->read(ResolveIndirectX()));
+		EOR_General(read(ResolveIndirectX()));
 		++R.PC;
 		return 6;
 	}
@@ -812,7 +814,7 @@ private:
 	int EOR_IndirectY()
 	{
 		bool pageCrossed;
-		EOR_General(Bus->read(ResolveIndirectY(pageCrossed)));
+		EOR_General(read(ResolveIndirectY(pageCrossed)));
 		++R.PC;
 		return pageCrossed ? 6 : 5;
 	}
@@ -820,9 +822,9 @@ private:
 	int INC_ZP()
 	{
 		uint16_t address = ResolveZPX();
-		uint8_t num = Bus->read(address);
+		uint8_t num = read(address);
 		INC_General(num);
-		Bus->write(address, num);
+		write(address, num);
 		++R.PC;
 		return 5;
 	}
@@ -830,9 +832,9 @@ private:
 	int INC_ZPX()
 	{
 		uint16_t address = ResolveZPX();
-		uint8_t num = Bus->read(address);
+		uint8_t num = read(address);
 		INC_General(num);
-		Bus->write(address, num);
+		write(address, num);
 		++R.PC;
 		return 6;
 	}
@@ -840,9 +842,9 @@ private:
 	int INC_Absolute()
 	{
 		uint16_t address = ResolveAbsolute();
-		uint8_t num = Bus->read(address);
+		uint8_t num = read(address);
 		INC_General(num);
-		Bus->write(address, num);
+		write(address, num);
 		++R.PC;
 		return 6;
 	}
@@ -851,9 +853,9 @@ private:
 	{
 		bool t;
 		uint16_t address = ResolveAbsoluteX(t);
-		uint8_t num = Bus->read(address);
+		uint8_t num = read(address);
 		INC_General(num);
-		Bus->write(address, num);
+		write(address, num);
 		++R.PC;
 		return 7;
 	}
@@ -874,22 +876,22 @@ private:
 
 	int JMP_Absolute()
 	{
-		uint16_t jmpAddress = ((uint16_t)Bus->read(++R.PC)) | (((uint16_t)Bus->read(++R.PC)) << 8);
+		uint16_t jmpAddress = ((uint16_t)read(++R.PC)) | (((uint16_t)read(++R.PC)) << 8);
 		R.PC = jmpAddress;
 		return 3;
 	}
 
 	int JMP_Indirect()
 	{
-		uint16_t indirectAddress = ((uint16_t)Bus->read(++R.PC)) | (((uint16_t)Bus->read(++R.PC)) << 8);
-		uint16_t jmpAddress = ((uint16_t)Bus->read(indirectAddress)) | (((uint16_t)Bus->read(indirectAddress + 1)) << 8);
+		uint16_t indirectAddress = ((uint16_t)read(++R.PC)) | (((uint16_t)read(++R.PC)) << 8);
+		uint16_t jmpAddress = ((uint16_t)read(indirectAddress)) | (((uint16_t)read(indirectAddress + 1)) << 8);
 		R.PC = jmpAddress;
 		return 5;
 	}
 
 	int JSR()
 	{
-		uint16_t jmpAddress = ((uint16_t)Bus->read(++R.PC)) | (((uint16_t)Bus->read(++R.PC)) << 8);
+		uint16_t jmpAddress = ((uint16_t)read(++R.PC)) | (((uint16_t)read(++R.PC)) << 8);
 		PushStackGeneral((uint8_t)((R.PC >> 8) & 0x00FF)); // Push High byte onto stack
 		PushStackGeneral((uint8_t)(R.PC & 0x00FF)); // Push low byte onto stack
 		R.PC = jmpAddress; // Jump to new address
@@ -898,28 +900,28 @@ private:
 
 	int LDA_Immediate()
 	{
-		LD_General(R.A, Bus->read(++R.PC));
+		LD_General(R.A, read(++R.PC));
 		++R.PC;
 		return 2;
 	}
 
 	int LDA_ZP()
 	{
-		LD_General(R.A, Bus->read(ResolveZP()));
+		LD_General(R.A, read(ResolveZP()));
 		++R.PC;
 		return 3;
 	}
 
 	int LDA_ZPX()
 	{
-		LD_General(R.A, Bus->read(ResolveZPX()));
+		LD_General(R.A, read(ResolveZPX()));
 		++R.PC;
 		return 4;
 	}
 
 	int LDA_Absolute()
 	{
-		LD_General(R.A, Bus->read(ResolveAbsolute()));
+		LD_General(R.A, read(ResolveAbsolute()));
 		++R.PC;
 		return 4;
 	}
@@ -927,7 +929,7 @@ private:
 	int LDA_AbsoluteX()
 	{
 		bool pageCrossed;
-		LD_General(R.A, Bus->read(ResolveAbsoluteX(pageCrossed)));
+		LD_General(R.A, read(ResolveAbsoluteX(pageCrossed)));
 		++R.PC;
 		return pageCrossed ? 5 : 4;
 	}
@@ -935,14 +937,14 @@ private:
 	int LDA_AbsoluteY()
 	{
 		bool pageCrossed;
-		LD_General(R.A, Bus->read(ResolveAbsoluteY(pageCrossed)));
+		LD_General(R.A, read(ResolveAbsoluteY(pageCrossed)));
 		++R.PC;
 		return pageCrossed ? 5 : 4;
 	}
 
 	int LDA_IndirectX()
 	{
-		LD_General(R.A, Bus->read(ResolveIndirectX()));
+		LD_General(R.A, read(ResolveIndirectX()));
 		++R.PC;
 		return 6;
 	}
@@ -950,35 +952,35 @@ private:
 	int LDA_IndirectY()
 	{
 		bool pageCrossed;
-		LD_General(R.A, Bus->read(ResolveIndirectY(pageCrossed)));
+		LD_General(R.A, read(ResolveIndirectY(pageCrossed)));
 		++R.PC;
 		return pageCrossed ? 6 : 5;
 	}
 
 	int LDX_Immediate()
 	{
-		LD_General(R.X, Bus->read(++R.PC));
+		LD_General(R.X, read(++R.PC));
 		++R.PC;
 		return 2;
 	}
 
 	int LDX_ZP()
 	{
-		LD_General(R.X, Bus->read(ResolveZP()));
+		LD_General(R.X, read(ResolveZP()));
 		++R.PC;
 		return 3;
 	}
 
 	int LDX_ZPY()
 	{
-		LD_General(R.X, Bus->read(ResolveZPY()));
+		LD_General(R.X, read(ResolveZPY()));
 		++R.PC;
 		return 4;
 	}
 
 	int LDX_Absolute()
 	{
-		LD_General(R.X, Bus->read(ResolveAbsolute()));
+		LD_General(R.X, read(ResolveAbsolute()));
 		++R.PC;
 		return 4;
 	}
@@ -986,35 +988,35 @@ private:
 	int LDX_AbsoluteY()
 	{
 		bool pageCrossed;
-		LD_General(R.X, Bus->read(ResolveAbsoluteY(pageCrossed)));
+		LD_General(R.X, read(ResolveAbsoluteY(pageCrossed)));
 		++R.PC;
 		return pageCrossed ? 5 : 4;
 	}
 
 	int LDY_Immediate()
 	{
-		LD_General(R.Y, Bus->read(++R.PC));
+		LD_General(R.Y, read(++R.PC));
 		++R.PC;
 		return 2;
 	}
 
 	int LDY_ZP()
 	{
-		LD_General(R.Y, Bus->read(ResolveZP()));
+		LD_General(R.Y, read(ResolveZP()));
 		++R.PC;
 		return 3;
 	}
 
 	int LDY_ZPX()
 	{
-		LD_General(R.Y, Bus->read(ResolveZPX()));
+		LD_General(R.Y, read(ResolveZPX()));
 		++R.PC;
 		return 4;
 	}
 
 	int LDY_Absolute()
 	{
-		LD_General(R.Y, Bus->read(ResolveAbsolute()));
+		LD_General(R.Y, read(ResolveAbsolute()));
 		++R.PC;
 		return 4;
 	}
@@ -1022,7 +1024,7 @@ private:
 	int LDY_AbsoluteX()
 	{
 		bool pageCrossed;
-		LD_General(R.Y, Bus->read(ResolveAbsoluteX(pageCrossed)));
+		LD_General(R.Y, read(ResolveAbsoluteX(pageCrossed)));
 		++R.PC;
 		return pageCrossed ? 5 : 4;
 	}
@@ -1037,9 +1039,9 @@ private:
 	int LSR_ZP()
 	{
 		uint8_t address = ResolveZP();
-		uint8_t num = Bus->read(address);
+		uint8_t num = read(address);
 		LSR_General(num);
-		Bus->write(address, num);
+		write(address, num);
 		++R.PC;
 		return 5;
 	}
@@ -1047,9 +1049,9 @@ private:
 	int LSR_ZPX()
 	{
 		uint8_t address = ResolveZPX();
-		uint8_t num = Bus->read(address);
+		uint8_t num = read(address);
 		LSR_General(num);
-		Bus->write(address, num);
+		write(address, num);
 		++R.PC;
 		return 6;
 	}
@@ -1057,9 +1059,9 @@ private:
 	int LSR_Absolute()
 	{
 		uint8_t address = ResolveAbsolute();
-		uint8_t num = Bus->read(address);
+		uint8_t num = read(address);
 		LSR_General(num);
-		Bus->write(address, num);
+		write(address, num);
 		++R.PC;
 		return 6;
 	}
@@ -1068,9 +1070,9 @@ private:
 	{
 		bool temp;
 		uint8_t address = ResolveAbsoluteX(temp); // TODO: This doesn't actually need this variable, maybe provide an implementation that ignores new pages.
-		uint8_t num = Bus->read(address);
+		uint8_t num = read(address);
 		LSR_General(num);
-		Bus->write(address, num);
+		write(address, num);
 		++R.PC;
 		return 7;
 	}
@@ -1083,28 +1085,28 @@ private:
 
 	int ORA_Immediate()
 	{
-		ORA_General(Bus->read(++R.PC));
+		ORA_General(read(++R.PC));
 		++R.PC;
 		return 2;
 	}
 
 	int ORA_ZP()
 	{
-		ORA_General(Bus->read(ResolveZP()));
+		ORA_General(read(ResolveZP()));
 		++R.PC;
 		return 3;
 	}
 
 	int ORA_ZPX()
 	{
-		ORA_General(Bus->read(ResolveZPX()));
+		ORA_General(read(ResolveZPX()));
 		++R.PC;
 		return 4;
 	}
 
 	int ORA_Absolute()
 	{
-		ORA_General(Bus->read(ResolveAbsolute()));
+		ORA_General(read(ResolveAbsolute()));
 		++R.PC;
 		return 4;
 	}
@@ -1112,7 +1114,7 @@ private:
 	int ORA_AbsoluteX()
 	{
 		bool pageCrossed;
-		ORA_General(Bus->read(ResolveAbsoluteX(pageCrossed)));
+		ORA_General(read(ResolveAbsoluteX(pageCrossed)));
 		++R.PC;
 		return pageCrossed ? 5 : 4;
 	}
@@ -1120,14 +1122,14 @@ private:
 	int ORA_AbsoluteY()
 	{
 		bool pageCrossed;
-		ORA_General(Bus->read(ResolveAbsoluteY(pageCrossed)));
+		ORA_General(read(ResolveAbsoluteY(pageCrossed)));
 		++R.PC;
 		return pageCrossed ? 5 : 4;
 	}
 
 	int ORA_IndirectX()
 	{
-		ORA_General(Bus->read(ResolveIndirectX()));
+		ORA_General(read(ResolveIndirectX()));
 		++R.PC;
 		return 6;
 	}
@@ -1135,7 +1137,7 @@ private:
 	int ORA_IndirectY()
 	{
 		bool pageCrossed;
-		ORA_General(Bus->read(ResolveIndirectY(pageCrossed)));
+		ORA_General(read(ResolveIndirectY(pageCrossed)));
 		++R.PC;
 		return pageCrossed ? 6 : 5;
 	}
@@ -1178,9 +1180,9 @@ private:
 	int ROL_ZP()
 	{
 		uint8_t address = ResolveZP();
-		uint8_t num = Bus->read(address);
+		uint8_t num = read(address);
 		ROL_General(num);
-		Bus->write(address, num);
+		write(address, num);
 		++R.PC;
 		return 5;
 	}
@@ -1188,9 +1190,9 @@ private:
 	int ROL_ZPX()
 	{
 		uint8_t address = ResolveZPX();
-		uint8_t num = Bus->read(address);
+		uint8_t num = read(address);
 		ROL_General(num);
-		Bus->write(address, num);
+		write(address, num);
 		++R.PC;
 		return 6;
 	}
@@ -1198,9 +1200,9 @@ private:
 	int ROL_Absolute()
 	{
 		uint8_t address = ResolveAbsolute();
-		uint8_t num = Bus->read(address);
+		uint8_t num = read(address);
 		ROL_General(num);
-		Bus->write(address, num);
+		write(address, num);
 		++R.PC;
 		return 6;
 	}
@@ -1209,9 +1211,9 @@ private:
 	{
 		bool temp;
 		uint8_t address = ResolveAbsoluteX(temp); // TODO: This doesn't actually need this variable, maybe provide an implementation that ignores new pages.
-		uint8_t num = Bus->read(address);
+		uint8_t num = read(address);
 		ROL_General(num);
-		Bus->write(address, num);
+		write(address, num);
 		++R.PC;
 		return 7;
 	}
@@ -1226,9 +1228,9 @@ private:
 	int ROR_ZP()
 	{
 		uint8_t address = ResolveZP();
-		uint8_t num = Bus->read(address);
+		uint8_t num = read(address);
 		ROR_General(num);
-		Bus->write(address, num);
+		write(address, num);
 		++R.PC;
 		return 5;
 	}
@@ -1236,9 +1238,9 @@ private:
 	int ROR_ZPX()
 	{
 		uint8_t address = ResolveZPX();
-		uint8_t num = Bus->read(address);
+		uint8_t num = read(address);
 		ROR_General(num);
-		Bus->write(address, num);
+		write(address, num);
 		++R.PC;
 		return 6;
 	}
@@ -1246,9 +1248,9 @@ private:
 	int ROR_Absolute()
 	{
 		uint8_t address = ResolveAbsolute();
-		uint8_t num = Bus->read(address);
+		uint8_t num = read(address);
 		ROR_General(num);
-		Bus->write(address, num);
+		write(address, num);
 		++R.PC;
 		return 6;
 	}
@@ -1257,9 +1259,9 @@ private:
 	{
 		bool temp;
 		uint8_t address = ResolveAbsoluteX(temp); // TODO: This doesn't actually need this variable, maybe provide an implementation that ignores new pages.
-		uint8_t num = Bus->read(address);
+		uint8_t num = read(address);
 		ROR_General(num);
-		Bus->write(address, num);
+		write(address, num);
 		++R.PC;
 		return 7;
 	}
@@ -1279,28 +1281,28 @@ private:
 
 	int SBC_Immediate()
 	{
-		SBC_General(Bus->read(++R.PC));
+		SBC_General(read(++R.PC));
 		++R.PC;
 		return 2;
 	}
 
 	int SBC_ZP()
 	{
-		SBC_General(Bus->read(ResolveZP()));
+		SBC_General(read(ResolveZP()));
 		++R.PC;
 		return 3;
 	}
 
 	int SBC_ZPX()
 	{
-		SBC_General(Bus->read(ResolveZPX()));
+		SBC_General(read(ResolveZPX()));
 		++R.PC;
 		return 4;
 	}
 
 	int SBC_Absolute()
 	{
-		SBC_General(Bus->read(ResolveAbsolute()));
+		SBC_General(read(ResolveAbsolute()));
 		++R.PC;
 		return 4;
 	}
@@ -1308,7 +1310,7 @@ private:
 	int SBC_AbsoluteX()
 	{
 		bool pageCrossed;
-		SBC_General(Bus->read(ResolveAbsoluteX(pageCrossed)));
+		SBC_General(read(ResolveAbsoluteX(pageCrossed)));
 		++R.PC;
 		return pageCrossed ? 5 : 4;
 	}
@@ -1316,14 +1318,14 @@ private:
 	int SBC_AbsoluteY()
 	{
 		bool pageCrossed;
-		SBC_General(Bus->read(ResolveAbsoluteY(pageCrossed)));
+		SBC_General(read(ResolveAbsoluteY(pageCrossed)));
 		++R.PC;
 		return pageCrossed ? 5 : 4;
 	}
 
 	int SBC_IndirectX()
 	{
-		SBC_General(Bus->read(ResolveIndirectX()));
+		SBC_General(read(ResolveIndirectX()));
 		++R.PC;
 		return 6;
 	}
@@ -1331,7 +1333,7 @@ private:
 	int SBC_IndirectY()
 	{
 		bool pageCrossed;
-		SBC_General(Bus->read(ResolveIndirectY(pageCrossed)));
+		SBC_General(read(ResolveIndirectY(pageCrossed)));
 		++R.PC;
 		return pageCrossed ? 6 : 5;
 	}
@@ -1359,21 +1361,21 @@ private:
 
 	int STA_ZP()
 	{
-		Bus->write(ResolveZP(), R.A);
+		write(ResolveZP(), R.A);
 		++R.PC;
 		return 3;
 	}
 
 	int STA_ZPX()
 	{
-		Bus->write(ResolveZPX(), R.A);
+		write(ResolveZPX(), R.A);
 		++R.PC;
 		return 4;
 	}
 
 	int STA_Absolute()
 	{
-		Bus->write(ResolveAbsolute(), R.A);
+		write(ResolveAbsolute(), R.A);
 		++R.PC;
 		return 4;
 	}
@@ -1381,7 +1383,7 @@ private:
 	int STA_AbsoluteX()
 	{
 		bool pageCrossed;
-		Bus->write(ResolveAbsoluteX(pageCrossed), R.A);
+		write(ResolveAbsoluteX(pageCrossed), R.A);
 		++R.PC;
 		return 5;
 	}
@@ -1389,14 +1391,14 @@ private:
 	int STA_AbsoluteY()
 	{
 		bool pageCrossed;
-		Bus->write(ResolveAbsoluteY(pageCrossed), R.A);
+		write(ResolveAbsoluteY(pageCrossed), R.A);
 		++R.PC;
 		return 5;
 	}
 
 	int STA_IndirectX()
 	{
-		Bus->write(ResolveIndirectX(), R.A);
+		write(ResolveIndirectX(), R.A);
 		++R.PC;
 		return 6;
 	}
@@ -1404,49 +1406,49 @@ private:
 	int STA_IndirectY()
 	{
 		bool pageCrossed;
-		Bus->write(ResolveIndirectY(pageCrossed), R.A);
+		write(ResolveIndirectY(pageCrossed), R.A);
 		++R.PC;
 		return 6;
 	}
 
 	int STX_ZP()
 	{
-		Bus->write(ResolveZP(), R.X);
+		write(ResolveZP(), R.X);
 		++R.PC;
 		return 3;
 	}
 
 	int STX_ZPY()
 	{
-		Bus->write(ResolveZPY(), R.X);
+		write(ResolveZPY(), R.X);
 		++R.PC;
 		return 4;
 	}
 
 	int STX_Absolute()
 	{
-		Bus->write(ResolveAbsolute(), R.X);
+		write(ResolveAbsolute(), R.X);
 		++R.PC;
 		return 4;
 	}
 
 	int STY_ZP()
 	{
-		Bus->write(ResolveZP(), R.Y);
+		write(ResolveZP(), R.Y);
 		++R.PC;
 		return 3;
 	}
 
 	int STY_ZPX()
 	{
-		Bus->write(ResolveZPX(), R.Y);
+		write(ResolveZPX(), R.Y);
 		++R.PC;
 		return 4;
 	}
 
 	int STY_Absolute()
 	{
-		Bus->write(ResolveAbsolute(), R.Y);
+		write(ResolveAbsolute(), R.Y);
 		++R.PC;
 		return 4;
 	}
@@ -1492,4 +1494,197 @@ private:
 		++R.PC;
 		return 2;
 	}
-};
+
+	void init()
+	{
+		// Initialize function pointer array to NOP for all instructions.
+		for (int i = 0; i < 256; i++) instruction[i] = &NOP;
+
+		instruction[0x69] = &ADC_Immediate;
+		instruction[0x65] = &ADC_ZP;
+		instruction[0x75] = &ADC_ZPX;
+		instruction[0x6D] = &ADC_Absolute;
+		instruction[0x7D] = &ADC_AbsoluteX;
+		instruction[0x79] = &ADC_AbsoluteY;
+		instruction[0x61] = &ADC_IndirectX;
+		instruction[0x71] = &ADC_IndirectY;
+
+		instruction[0x29] = &AND_Immediate;
+		instruction[0x25] = &AND_ZP;
+		instruction[0x35] = &AND_ZPX;
+		instruction[0x2D] = &AND_Absolute;
+		instruction[0x3D] = &AND_AbsoluteX;
+		instruction[0x39] = &AND_AbsoluteY;
+		instruction[0x21] = &AND_IndirectX;
+		instruction[0x31] = &AND_IndirectY;
+
+		instruction[0x0A] = &ASL_Accumulator;
+		instruction[0x06] = &ASL_ZP;
+		instruction[0x16] = &ASL_ZPX;
+		instruction[0x0E] = &ASL_Absolute;
+		instruction[0x1E] = &ASL_AbsoluteX;
+
+		instruction[0x90] = &BCC;
+		instruction[0xB0] = &BCS;
+		instruction[0xF0] = &BEQ;
+		instruction[0x30] = &BMI;
+		instruction[0xD0] = &BNE;
+		instruction[0x10] = &BPL;
+		instruction[0x50] = &BVC;
+		instruction[0x70] = &BVS;
+
+		instruction[0x24] = &BIT_ZP;
+		instruction[0x2C] = &BIT_Absolute;
+
+		instruction[0x00] = &BRK;
+
+		instruction[0x18] = &CLC;
+		instruction[0xD8] = &CLD;
+		instruction[0x58] = &CLI;
+		instruction[0xB8] = &CLV;
+
+		instruction[0xC9] = &CMP_Immediate;
+		instruction[0xC5] = &CMP_ZP;
+		instruction[0xD5] = &CMP_ZPX;
+		instruction[0xCD] = &CMP_Absolute;
+		instruction[0xDD] = &CMP_AbsoluteX;
+		instruction[0xD9] = &CMP_AbsoluteY;
+		instruction[0xC1] = &CMP_IndirectX;
+		instruction[0xD1] = &CMP_IndirectY;
+
+		instruction[0xE0] = &CPX_Immediate;
+		instruction[0xE4] = &CPX_ZP;
+		instruction[0xEC] = &CPX_Absolute;
+
+		instruction[0xC0] = &CPY_Immediate;
+		instruction[0xC4] = &CPY_ZP;
+		instruction[0xCC] = &CPY_Absolute;
+
+		instruction[0xC6] = &DEC_ZP;
+		instruction[0xD6] = &DEC_ZPX;
+		instruction[0xCE] = &DEC_Absolute;
+		instruction[0xDE] = &DEC_AbsoluteX;
+
+		instruction[0xCA] = &DEX;
+		instruction[0x88] = &DEY;
+
+		instruction[0x49] = &EOR_Immediate;
+		instruction[0x45] = &EOR_ZP;
+		instruction[0x55] = &EOR_ZPX;
+		instruction[0x4D] = &EOR_Absolute;
+		instruction[0x5D] = &EOR_AbsoluteX;
+		instruction[0x59] = &EOR_AbsoluteY;
+		instruction[0x41] = &EOR_IndirectX;
+		instruction[0x51] = &EOR_IndirectY;
+
+		instruction[0xE6] = &INC_ZP;
+		instruction[0xF6] = &INC_ZPX;
+		instruction[0xEE] = &INC_Absolute;
+		instruction[0xFE] = &INC_AbsoluteX;
+
+		instruction[0xE8] = &INX;
+		instruction[0xC8] = &INY;
+
+		instruction[0x4C] = &JMP_Absolute;
+		instruction[0x6C] = &JMP_Indirect;
+
+		instruction[0x20] = &JSR;
+
+		instruction[0xA9] = &LDA_Immediate;
+		instruction[0xA5] = &LDA_ZP;
+		instruction[0xB5] = &LDA_ZPX;
+		instruction[0xAD] = &LDA_Absolute;
+		instruction[0xBD] = &LDA_AbsoluteX;
+		instruction[0xB9] = &LDA_AbsoluteY;
+		instruction[0xA1] = &LDA_IndirectX;
+		instruction[0xB1] = &LDA_IndirectY;
+
+		instruction[0xA2] = &LDX_Immediate;
+		instruction[0xA6] = &LDX_ZP;
+		instruction[0xB6] = &LDX_ZPY;
+		instruction[0xAE] = &LDX_Absolute;
+		instruction[0xBE] = &LDX_AbsoluteY;
+
+		instruction[0xA0] = &LDY_Immediate;
+		instruction[0xA4] = &LDY_ZP;
+		instruction[0xB4] = &LDY_ZPX;
+		instruction[0xAC] = &LDY_Absolute;
+		instruction[0xBC] = &LDY_AbsoluteX;
+
+		instruction[0x4A] = &LSR_Accumulator;
+		instruction[0x46] = &LSR_ZP;
+		instruction[0x56] = &LSR_ZPX;
+		instruction[0x4E] = &LSR_Absolute;
+		instruction[0x5E] = &LSR_AbsoluteX;
+
+		instruction[0xEA] = &NOP;
+
+		instruction[0x09] = &ORA_Immediate;
+		instruction[0x05] = &ORA_ZP;
+		instruction[0x15] = &ORA_ZPX;
+		instruction[0x0D] = &ORA_Absolute;
+		instruction[0x1D] = &ORA_AbsoluteX;
+		instruction[0x19] = &ORA_AbsoluteY;
+		instruction[0x01] = &ORA_IndirectX;
+		instruction[0x11] = &ORA_IndirectY;
+
+		instruction[0x48] = &PHA;
+		instruction[0x08] = &PHP;
+		instruction[0x68] = &PLA;
+		instruction[0x28] = &PLP;
+
+		instruction[0x2A] = &ROL_Accumulator;
+		instruction[0x26] = &ROL_ZP;
+		instruction[0x36] = &ROL_ZPX;
+		instruction[0x2E] = &ROL_Absolute;
+		instruction[0x3E] = &ROL_AbsoluteX;
+
+		instruction[0x6A] = &ROR_Accumulator;
+		instruction[0x66] = &ROR_ZP;
+		instruction[0x76] = &ROR_ZPX;
+		instruction[0x6E] = &ROR_Absolute;
+		instruction[0x7E] = &ROR_AbsoluteX;
+
+		instruction[0x40] = &RTI;
+		instruction[0x60] = &RTS;
+
+		instruction[0xE9] = &SBC_Immediate;
+		instruction[0xE5] = &SBC_ZP;
+		instruction[0xF5] = &SBC_ZPX;
+		instruction[0xED] = &SBC_Absolute;
+		instruction[0xFD] = &SBC_AbsoluteX;
+		instruction[0xF9] = &SBC_AbsoluteY;
+		instruction[0xE1] = &SBC_IndirectX;
+		instruction[0xF1] = &SBC_IndirectY;
+
+		instruction[0x38] = &SEC;
+		instruction[0xF8] = &SED;
+		instruction[0x78] = &SEI;
+
+		instruction[0x85] = &STA_ZP;
+		instruction[0x95] = &STA_ZPX;
+		instruction[0x8D] = &STA_Absolute;
+		instruction[0x9D] = &STA_AbsoluteX;
+		instruction[0x99] = &STA_AbsoluteY;
+		instruction[0x81] = &STA_IndirectX;
+		instruction[0x91] = &STA_IndirectY;
+
+		instruction[0x86] = &STX_ZP;
+		instruction[0x96] = &STX_ZPY;
+		instruction[0x8E] = &STX_Absolute;
+
+		instruction[0x84] = &STY_ZP;
+		instruction[0x94] = &STY_ZPX;
+		instruction[0x8C] = &STY_Absolute;
+
+		instruction[0xAA] = &TAX;
+		instruction[0xA8] = &TAY;
+		instruction[0xBA] = &TSX;
+		instruction[0x8A] = &TXA;
+		instruction[0x9A] = &TXS;
+		instruction[0x98] = &TYA;
+
+		// Initialize registers to 0, except PC which is initialized to value from reset vector.
+		doRES();
+	}
+}
