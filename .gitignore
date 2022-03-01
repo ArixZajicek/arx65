@@ -1,0 +1,5 @@
+/build/arx65
+/build/dep/
+/build/obj/
+.vscode/
+.idea/
